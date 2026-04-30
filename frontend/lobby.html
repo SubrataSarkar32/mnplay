@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Militia Web</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+.container {
+    background: rgba(255,255,255,0.05);
+    padding: 30px;
+    border-radius: 12px;
+    text-align: center;
+    width: 300px;
+}
+
+button {
+    width: 100%;
+    padding: 12px;
+    margin-top: 10px;
+    border: none;
+    border-radius: 8px;
+    background: #3b82f6;
+    color: white;
+    font-size: 16px;
+}
+
+input {
+    width: 100%;
+    padding: 10px;
+    margin-top: 10px;
+    border-radius: 8px;
+    border: none;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+    <h2>🎮 Mini Militia Web</h2>
+
+    <button onclick="quickPlay()">⚡ Quick Match</button>
+
+    <hr>
+
+    <input id="roomId" placeholder="Room ID">
+    <input id="password" placeholder="Password (optional)">
+
+    <button onclick="createRoom()">🔒 Create Room</button>
+    <button onclick="joinRoom()">➡ Join Room</button>
+</div>
+
+<script>
+async function login() {
+    const res = await fetch("/login", { method: "POST" });
+    const data = await res.json();
+    localStorage.setItem("token", data.token);
+}
+
+async function quickPlay() {
+    await login();
+    const res = await fetch("/matchmake");
+    const data = await res.json();
+    window.location.href = `/game?room=${data.room}`;
+}
+
+async function createRoom() {
+    await login();
+    const room = document.getElementById("roomId").value;
+    const password = document.getElementById("password").value;
+
+    const res = await fetch("/create-room", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ room, password })
+    });
+
+    const data = await res.json();
+    window.location.href = `/game?room=${data.room}&password=${password}`;
+}
+
+async function joinRoom() {
+    await login();
+    const room = document.getElementById("roomId").value;
+    const password = document.getElementById("password").value;
+
+    window.location.href = `/game?room=${room}&password=${password}`;
+}
+</script>
+
+</body>
+</html>
