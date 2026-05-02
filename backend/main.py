@@ -1,184 +1,146 @@
-import uuid
+import asyncio
+import os
 import random
-import math
-from .map_loader import TileMap
-from .logging_config import logger
-from .rate_limiter import is_allowed
-from .redis_client import save_room, get_room, list_rooms
+import time
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Body, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
-tilemap = TileMap("shared/map.json")
+from .game import GameManager
+from .matchmaking import Matchmaker
+from .auth import create_token, decode_token
 
-GRAVITY = 500
-PLAYER_SPEED = 200
-JUMP_FORCE = -300
-BULLET_SPEED = 500
-RESPAWN_TIME = 3
-PLAYER_SIZE = 30
+app = FastAPI()
+manager = GameManager()
+matchmaker = Matchmaker(manager)
 
+clients = {}
+TICK_RATE = 1 / 30
 
-class Bullet:
-    def __init__(self, x, y, angle, owner):
-        self.id = str(uuid.uuid4())
-        self.x = x
-        self.y = y
-        self.vx = math.cos(angle) * BULLET_SPEED
-        self.vy = math.sin(angle) * BULLET_SPEED
-        self.owner = owner
-
-    def update(self, dt):
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-
-    def to_dict(self):
-        return {"id": self.id, "x": self.x, "y": self.y}
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class Player:
-    def __init__(self):
-        self.id = str(uuid.uuid4())
-        self.name = "Player"
-        logger.info(f"Player joined: {self.id}")
-        self.spawn()
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "x": self.x,
-            "y": self.y,
-            "health": self.health,
-            "alive": self.alive
-        }
+    print(f"{request.url.path} took {duration:.4f}s")
 
-    def spawn(self):
-        self.x = random.randint(100, 500)
-        self.y = 100
-        self.vx = 0
-        self.vy = 0
-        self.health = 100
-        self.alive = True
-        self.respawn_timer = 0
-        self.jetpack = 100
-        self.on_ground = False
+    return response
 
 
-def move_with_collision(p, dt):
-    # Horizontal
-    new_x = p.x + p.vx * dt
-    if not tilemap.is_solid(new_x, p.y):
-        p.x = new_x
-
-    # Vertical
-    new_y = p.y + p.vy * dt
-
-    if p.vy >= 0 and tilemap.is_solid(p.x, new_y + PLAYER_SIZE / 2):
-        p.vy = 0
-        p.on_ground = True
-    elif p.vy < 0 and tilemap.is_solid(p.x, new_y - PLAYER_SIZE / 2):
-        p.vy = 0
-        p.on_ground = False
-    else:
-        p.y = new_y
-        p.on_ground = False
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "frontend")), name="static")
 
 
-class Room:
-    def __init__(self, room_id, private=False, password=None):
-        self.room_id = room_id
-        self.players = {}
-        self.bullets = []
-        self.max_players = 4
+@app.get("/")
+async def lobby():
+    return FileResponse(os.path.join(BASE_DIR, "frontend", "lobby.html"))
 
-        self.private = private
-        self.password = password
 
-    def is_full(self):
-        return len(self.players) >= self.max_players
+@app.get("/game")
+async def game():
+    return FileResponse(os.path.join(BASE_DIR, "frontend", "index.html"))
 
-    def add_player(self):
-        p = Player()
-        self.players[p.id] = p
-        return p
 
-    def remove_player(self, pid):
-        if pid in self.players:
-            del self.players[pid]
+@app.post("/create-room")
+async def create_room(data: dict = Body(...)):
+    room_id = data.get("room") or str(random.randint(100000, 999999))
+    password = data.get("password")
 
-    def handle_input(self, pid, data, dt=1/30):
-        if not is_allowed(pid):
-            return  # drop spam input
+    manager.create_room(
+        room_id,
+        private=True,
+        password=password
+    )
 
-        p = self.players.get(pid)
-        if not p or not p.alive:
+    return {"room": room_id}
+
+
+@app.post("/login")
+async def login():
+    name = random.choice(["Alpha", "Blaze", "Ghost", "Viper"]) + str(random.randint(100, 999))
+    token = create_token(name)
+
+    return JSONResponse({
+        "token": token,
+        "username": name
+    })
+
+
+@app.get("/matchmake")
+async def matchmake():
+    room_id = matchmaker.find_room()
+    return {"room": room_id}
+
+
+@app.websocket("/ws")
+async def ws(
+    ws: WebSocket,
+    token: str = Query(...),
+    room: str = Query(None),
+    password: str = Query(None)
+):
+    await ws.accept()
+
+    user = decode_token(token)
+    username = user["username"]
+
+    if room:
+        game_room = manager.get_room(room)
+
+        if not game_room:
+            await ws.close(code=4000)
             return
 
-        p.vx = 0
+        if game_room.private:
+            if game_room.password != password:
+                await ws.close(code=4001)
+                return
+    else:
+        room = matchmaker.find_room()
+        game_room = manager.get_room(room)
 
-        if data.get("left"):
-            p.vx = -PLAYER_SPEED
-        if data.get("right"):
-            p.vx = PLAYER_SPEED
+    player = game_room.add_player()
+    player.name = username
 
-        if data.get("jump") and p.on_ground:
-            p.vy = JUMP_FORCE
+    clients[ws] = (room, player.id)
 
-        if data.get("jetpack") and p.jetpack > 0:
-            p.vy -= 400 * dt
-            p.jetpack -= 20 * dt
+    await ws.send_json({
+        "type": "init",
+        "playerId": player.id,
+        "name": username,
+        "room": room
+    })
 
-        if data.get("shoot"):
-            angle = data.get("angle", 0)
-            self.bullets.append(Bullet(p.x, p.y, angle, p.id))
+    try:
+        while True:
+            data = await ws.receive_json()
+            game_room.handle_input(player.id, data)
 
-    def update(self, dt):
-        for p in self.players.values():
-            if not p.alive:
-                p.respawn_timer -= dt
-                if p.respawn_timer <= 0:
-                    p.spawn()
-                continue
-
-            p.vy += GRAVITY * dt
-            move_with_collision(p, dt)
-
-        for b in self.bullets:
-            b.update(dt)
-
-        # Bullet collision
-        for b in self.bullets:
-            for p in self.players.values():
-                if p.id == b.owner or not p.alive:
-                    continue
-
-                if abs(p.x - b.x) < 20 and abs(p.y - b.y) < 20:
-                    p.health -= 20
-                    if p.health <= 0:
-                        p.alive = False
-                        p.respawn_timer = RESPAWN_TIME
-
-        self.bullets = [b for b in self.bullets if 0 < b.x < 2000]
-
-    def serialize(self):
-        return {
-            "players": [p.to_dict() for p in self.players.values()],
-            "bullets": [b.to_dict() for b in self.bullets]
-        }
+    except WebSocketDisconnect:
+        game_room.remove_player(player.id)
+        del clients[ws]
 
 
-class GameManager:
-    def __init__(self):
-        self.rooms = {}
+async def game_loop():
+    while True:
+        for ws, (room_id, _) in list(clients.items()):
+            room = manager.get_room(room_id)
+            room.update(TICK_RATE)
 
-    def create_room(self, room_id, private=False, password=None):
-        room = Room(room_id, private, password)
-        self.rooms[room_id] = room
-        return room
+            try:
+                await ws.send_json({
+                    "type": "state",
+                    **room.serialize()
+                })
+            except (RuntimeError, ConnectionError):
+                pass
 
-    def get_room(self, room_id):
-        return self.rooms.get(room_id)
+        await asyncio.sleep(TICK_RATE)
 
-    def sync_room(self, room):
-        save_room(room.room_id, {
-            "players": len(room.players),
-            "private": room.private
-        })
+
+@app.on_event("startup")
+async def start():
+    asyncio.create_task(game_loop())
