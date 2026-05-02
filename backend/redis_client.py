@@ -16,4 +16,4 @@ def get_room(room_id):
 
 def list_rooms():
     keys = r.keys("room:*")
-    return [k.split(":")[1] for k in keys]
+    return [k[len("room:"):] for k in keys]

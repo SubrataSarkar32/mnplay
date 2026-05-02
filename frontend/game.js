@@ -16,6 +16,7 @@ let socket, myId, myName;
 let players = {}, texts = {};
 let cursors, spaceKey;
 let joystick = { x: 0, y: 0 };
+const isMobile = /Mobi|Android/i.test(navigator.userAgent);
 
 function setupJoystick() {
     const joy = document.getElementById("joystick");
@@ -54,7 +55,17 @@ function preload() {
     this.load.tilemapTiledJSON("map", "map.json");
 }
 
+function createPlayerTexture(scene) {
+    if (scene.textures.exists("player")) return;
+    const g = scene.make.graphics({ x: 0, y: 0, add: false });
+    g.fillStyle(0xffffff);
+    g.fillRect(0, 0, 30, 30);
+    g.generateTexture("player", 30, 30);
+    g.destroy();
+}
+
 function create() {
+    createPlayerTexture(this);
     cursors = this.input.keyboard.createCursorKeys();
     spaceKey = this.input.keyboard.addKey(
         Phaser.Input.Keyboard.KeyCodes.SPACE
@@ -63,7 +74,6 @@ function create() {
     const map = this.make.tilemap({ key: "map" });
     const tileset = map.addTilesetImage("tiles");
     const layer = map.createLayer(0, tileset, 0, 0);
-    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
     if (isMobile) {
         setupJoystick();
         setupShoot();
@@ -95,7 +105,7 @@ function create() {
 function updatePlayers(playersData, layer) {
     playersData.forEach(p => {
         if (!players[p.id]) {
-            players[p.id] = this.physics.add.sprite(p.x, p.y, null)
+            players[p.id] = this.physics.add.sprite(p.x, p.y, "player")
                 .setDisplaySize(30, 30)
                 .setTint(p.id === myId ? 0x0000ff : 0x00ff00);
 
@@ -170,14 +180,6 @@ function update() {
             angle: angle
         };
     }
-    // const input = {
-    //     left: cursors.left.isDown,
-    //     right: cursors.right.isDown,
-    //     jump: cursors.up.isDown,
-    //     jetpack: cursors.up.isDown,
-    //     shoot: spaceKey.isDown,
-    //     angle: angle
-    // };
 
     socket.send(JSON.stringify(input));
 }

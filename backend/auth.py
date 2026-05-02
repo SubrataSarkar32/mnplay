@@ -1,7 +1,8 @@
+import os
 import uuid
 from jose import jwt
 
-SECRET = "supersecretkey"
+SECRET = os.getenv("SECRET_KEY", "supersecretkey")
 ALGO = "HS256"
 
 

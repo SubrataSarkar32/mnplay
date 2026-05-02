@@ -37,7 +37,7 @@ class Player:
     def __init__(self):
         self.id = str(uuid.uuid4())
         self.name = "Player"
-        logger.info(f"Player joined: {player.id}")
+        logger.info(f"Player joined: {self.id}")
         self.spawn()
 
     def to_dict(self):
@@ -71,9 +71,12 @@ def move_with_collision(p, dt):
     # Vertical
     new_y = p.y + p.vy * dt
 
-    if tilemap.is_solid(p.x, new_y + PLAYER_SIZE / 2):
+    if p.vy >= 0 and tilemap.is_solid(p.x, new_y + PLAYER_SIZE / 2):
         p.vy = 0
         p.on_ground = True
+    elif p.vy < 0 and tilemap.is_solid(p.x, new_y - PLAYER_SIZE / 2):
+        p.vy = 0
+        p.on_ground = False
     else:
         p.y = new_y
         p.on_ground = False
@@ -101,7 +104,7 @@ class Room:
         if pid in self.players:
             del self.players[pid]
 
-    def handle_input(self, pid, data):
+    def handle_input(self, pid, data, dt=1/30):
         if not is_allowed(pid):
             return  # drop spam input
 
@@ -120,8 +123,8 @@ class Room:
             p.vy = JUMP_FORCE
 
         if data.get("jetpack") and p.jetpack > 0:
-            p.vy -= 400 * 0.016
-            p.jetpack -= 20 * 0.016
+            p.vy -= 400 * dt
+            p.jetpack -= 20 * dt
 
         if data.get("shoot"):
             angle = data.get("angle", 0)
@@ -172,11 +175,7 @@ class GameManager:
         return room
 
     def get_room(self, room_id):
-        room = self.rooms.get(room_id)
-        if room:
-            return room
-        data = self.create_room(room_id)
-        return data  # fallback (or rebuild)
+        return self.rooms.get(room_id)
 
     def sync_room(self, room):
         save_room(room.room_id, {

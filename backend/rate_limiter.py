@@ -14,4 +14,4 @@ def is_allowed(player_id):
 
     count = r.zcard(key)
 
-    return count <= LIMIT
+    return count < LIMIT
