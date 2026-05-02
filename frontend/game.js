@@ -51,8 +51,8 @@ function setupShoot() {
 }
 
 function preload() {
-    this.load.image("tiles", "tiles.png");
-    this.load.tilemapTiledJSON("map", "map.json");
+    this.load.image("tiles", "/static/tiles.png");
+    this.load.tilemapTiledJSON("map", "/static/map.json");
 }
 
 function createPlayerTexture(scene) {
